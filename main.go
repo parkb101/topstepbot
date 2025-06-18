@@ -27,31 +27,31 @@ type OrderRequest struct {
 
 const (
 	apiURL       = "https://api.topstep.com/v1/order"
-	secretKey    = "aPscKa0MbL0kMu0USY/UO3i3Q4cT+841+VOGeJqMddo="
-	accountID    = "50KTC-V2-111386-61492234"
-	symbol       = "/NQ" // use "/ES" if you want to trade ES instead
+	symbol       = "/NQ" // change to "/ES" if needed
 	quantity     = 10
 	maxDailyLoss = -800.0
-	minTradeGap  = 180 // seconds
+	minTradeGap  = 180 // seconds between trades
 )
 
 var (
-	lastTradeTime time.Time
-	totalProfit   float64
-	mutex         sync.Mutex
+	accountID  = os.Getenv("ACCOUNT_ID")
+	secretKey  = os.Getenv("API_KEY")
+	lastTrade  time.Time
+	totalPnL   float64
+	mutex      sync.Mutex
 )
 
 func placeOrder(side string) {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	if time.Since(lastTradeTime).Seconds() < minTradeGap {
-		log.Println("Trade skipped: throttle active")
+	if time.Since(lastTrade).Seconds() < minTradeGap {
+		log.Println("Trade skipped: too soon since last trade")
 		return
 	}
 
-	if totalProfit <= maxDailyLoss {
-		log.Println("Max daily loss reached. Trading halted.")
+	if totalPnL <= maxDailyLoss {
+		log.Println("Trading halted: max daily loss reached")
 		return
 	}
 
@@ -63,13 +63,14 @@ func placeOrder(side string) {
 		OrderType:   "market",
 		TimeInForce: "GTC",
 	}
-	jsonOrder, _ := json.Marshal(order)
 
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonOrder))
+	bodyData, _ := json.Marshal(order)
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(bodyData))
 	if err != nil {
 		log.Println("Request error:", err)
 		return
 	}
+
 	req.Header.Set("Authorization", "Bearer "+secretKey)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -79,16 +80,18 @@ func placeOrder(side string) {
 		return
 	}
 	defer resp.Body.Close()
-	body, _ := ioutil.ReadAll(resp.Body)
-	fmt.Println("Trade Executed:", string(body))
 
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	fmt.Println("Trade Executed:", string(respBody))
+
+	// Simulated PnL update (mock values)
 	mockPnL := 250.0
 	if side == "sell" {
 		mockPnL = -150.0
 	}
-	totalProfit += mockPnL
-	lastTradeTime = time.Now()
-	log.Printf("Updated PnL: $%.2f\n", totalProfit)
+	totalPnL += mockPnL
+	lastTrade = time.Now()
+	log.Printf("Total PnL: $%.2f\n", totalPnL)
 }
 
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
@@ -104,4 +107,16 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	} else if signal.Message == "SELL_SIGNAL" {
 		placeOrder("sell")
 	} else {
-		log.Println("Unknown signal received:", signal
+		log.Println("Unknown signal received:", signal.Message)
+	}
+}
+
+func main() {
+	http.HandleFunc("/webhook", webhookHandler)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	fmt.Println("Bot listening on port " + port)
+	http.ListenAndServe(":"+port, nil)
+}
