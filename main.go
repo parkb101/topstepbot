@@ -13,7 +13,7 @@ import (
 )
 
 type Signal struct {
-	Message string `json:"message"`
+	Message string  `json:"message"`
 	RSI     float64 `json:"rsi"`
 	VWAP    float64 `json:"vwap"`
 	Price   float64 `json:"price"`
@@ -29,19 +29,19 @@ type OrderRequest struct {
 }
 
 const (
-	apiURL       = "https://api.topstep.com/v1/order"
-	secretKey    = "aPscKa0MbL0kMu0USY/UO3i3Q4cT+841+VOGeJqMddo="
-	accountID    = "50KTC-V2-111386-61492234"
+	apiURL       = "https://api.topstepx.com/api/Order/place"
 	symbol       = "/NQ" // or "/ES"
 	quantity     = 10
 	maxDailyLoss = -800.0
 	minTradeGap  = 180 // seconds between trades
-	exitRSI       = 55.0
-	entryRSIBuy   = 62.90
-	entryRSISell  = 37.10
+	exitRSI      = 55.0
+	entryRSIBuy  = 62.90
+	entryRSISell = 37.10
 )
 
 var (
+	secretKey    = os.Getenv("TOPSTEP_API_KEY")
+	accountID    = os.Getenv("TOPSTEP_ACCOUNT_ID")
 	lastTradeTime time.Time
 	totalProfit float64
 	mutex       sync.Mutex
