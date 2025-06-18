@@ -14,6 +14,9 @@ import (
 
 type Signal struct {
 	Message string `json:"message"`
+	RSI     float64 `json:"rsi"`
+	VWAP    float64 `json:"vwap"`
+	Price   float64 `json:"price"`
 }
 
 type OrderRequest struct {
@@ -27,34 +30,25 @@ type OrderRequest struct {
 
 const (
 	apiURL       = "https://api.topstep.com/v1/order"
-	symbol       = "/NQ" // change to "/ES" if needed
+	secretKey    = "aPscKa0MbL0kMu0USY/UO3i3Q4cT+841+VOGeJqMddo="
+	accountID    = "50KTC-V2-111386-61492234"
+	symbol       = "/NQ" // or "/ES"
 	quantity     = 10
 	maxDailyLoss = -800.0
 	minTradeGap  = 180 // seconds between trades
+	exitRSI       = 55.0
+	entryRSIBuy   = 62.90
+	entryRSISell  = 37.10
 )
 
 var (
-	accountID  = os.Getenv("ACCOUNT_ID")
-	secretKey  = os.Getenv("API_KEY")
-	lastTrade  time.Time
-	totalPnL   float64
-	mutex      sync.Mutex
+	lastTradeTime time.Time
+	totalProfit float64
+	mutex       sync.Mutex
+	inPosition  string // "long", "short", or ""
 )
 
 func placeOrder(side string) {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	if time.Since(lastTrade).Seconds() < minTradeGap {
-		log.Println("Trade skipped: too soon since last trade")
-		return
-	}
-
-	if totalPnL <= maxDailyLoss {
-		log.Println("Trading halted: max daily loss reached")
-		return
-	}
-
 	order := OrderRequest{
 		AccountID:   accountID,
 		Symbol:      symbol,
@@ -63,14 +57,13 @@ func placeOrder(side string) {
 		OrderType:   "market",
 		TimeInForce: "GTC",
 	}
+	jsonOrder, _ := json.Marshal(order)
 
-	bodyData, _ := json.Marshal(order)
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(bodyData))
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonOrder))
 	if err != nil {
 		log.Println("Request error:", err)
 		return
 	}
-
 	req.Header.Set("Authorization", "Bearer "+secretKey)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -80,18 +73,75 @@ func placeOrder(side string) {
 		return
 	}
 	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+	fmt.Println("Trade Executed:", string(body))
 
-	respBody, _ := ioutil.ReadAll(resp.Body)
-	fmt.Println("Trade Executed:", string(respBody))
-
-	// Simulated PnL update (mock values)
 	mockPnL := 250.0
 	if side == "sell" {
 		mockPnL = -150.0
 	}
-	totalPnL += mockPnL
-	lastTrade = time.Now()
-	log.Printf("Total PnL: $%.2f\n", totalPnL)
+	totalProfit += mockPnL
+	lastTradeTime = time.Now()
+	log.Printf("Updated PnL: $%.2f\n", totalProfit)
+}
+
+func exitPosition() {
+	log.Println("Exiting position...")
+	if inPosition == "long" {
+		placeOrder("sell")
+	} else if inPosition == "short" {
+		placeOrder("buy")
+	}
+	inPosition = ""
+}
+
+func handleSignal(msg string, rsi float64) {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	if time.Since(lastTradeTime).Seconds() < minTradeGap {
+		log.Println("Trade skipped: throttle active")
+		return
+	}
+
+	if totalProfit <= maxDailyLoss {
+		log.Println("Max daily loss reached. Trading halted.")
+		return
+	}
+
+	switch msg {
+	case "BUY_SIGNAL":
+		if inPosition == "" && rsi > entryRSIBuy {
+			placeOrder("buy")
+			inPosition = "long"
+		} else if inPosition == "short" && rsi > entryRSIBuy {
+			exitPosition()
+			placeOrder("buy")
+			inPosition = "long"
+		}
+	case "SELL_SIGNAL":
+		if inPosition == "" && rsi < entryRSISell {
+			placeOrder("sell")
+			inPosition = "short"
+		} else if inPosition == "long" && rsi < entryRSISell {
+			exitPosition()
+			placeOrder("sell")
+			inPosition = "short"
+		}
+	case "EXIT_SIGNAL":
+		exitPosition()
+	default:
+		log.Println("Unknown signal received:", msg)
+	}
+
+	// Auto-exit logic
+	if inPosition == "long" && rsi < exitRSI {
+		log.Println("Exiting long position due to RSI drop")
+		exitPosition()
+	} else if inPosition == "short" && rsi > (100 - exitRSI) {
+		log.Println("Exiting short position due to RSI rise")
+		exitPosition()
+	}
 }
 
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
@@ -101,14 +151,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
-
-	if signal.Message == "BUY_SIGNAL" {
-		placeOrder("buy")
-	} else if signal.Message == "SELL_SIGNAL" {
-		placeOrder("sell")
-	} else {
-		log.Println("Unknown signal received:", signal.Message)
-	}
+	handleSignal(signal.Message, signal.RSI)
 }
 
 func main() {
